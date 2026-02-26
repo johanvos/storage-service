@@ -187,11 +187,6 @@ public class GroupChangeApplicator {
         .orElseThrow(() -> new ForbiddenException())
         .getRole() == Member.Role.ADMINISTRATOR;
 
-    // changing labels requires modify-attributes permission
-    if (!GroupAuth.isModifyAttributesAllowed(user, group)) {
-      throw new ForbiddenException("modifying label requires modify-group-attributes permission");
-    }
-
     final Map<ByteString, Member.Builder> memberBuilders = modifiedGroupBuilder.getMembersBuilderList().stream()
         .collect(Collectors.toMap(Member.Builder::getUserId, Function.identity()));
 
