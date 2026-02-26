@@ -68,7 +68,7 @@ public class MetricsUtil {
       otlpMeterRegistry.config().meterFilter(new MeterFilter() {
         @Override
         public DistributionStatisticConfig configure(final Meter.Id id, final DistributionStatisticConfig config) {
-          return defaultDistributionStatisticConfig.merge(config);
+          return config.merge(defaultDistributionStatisticConfig);
         }
       });
     }

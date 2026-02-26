@@ -340,7 +340,6 @@ public class GroupsController {
 
   private static DistributionSummary distributionSummary(final String name, final String userAgent) {
     return DistributionSummary.builder(name)
-        .publishPercentileHistogram(true)
         .tags(Tags.of(UserAgentTagUtil.getPlatformTag(userAgent)))
         .register(Metrics.globalRegistry);
   }
