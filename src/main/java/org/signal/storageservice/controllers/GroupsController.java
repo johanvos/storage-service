@@ -552,7 +552,7 @@ public class GroupsController {
       groupChangeApplicator.applyDeleteMembers(user, inviteLinkPassword, group.get(), modifiedGroupBuilder, actions.getDeleteMembersList());
       groupChangeApplicator.applyModifyMemberRoles(user, inviteLinkPassword, group.get(), modifiedGroupBuilder, actions.getModifyMemberRolesList());
       if (actions.getModifyMemberLabelCount() > 0) {
-        groupChangeApplicator.applyModifyMemberLabel(user, modifiedGroupBuilder, actions.getModifyMemberLabelList());
+        groupChangeApplicator.applyModifyMemberLabel(user, group.get(), modifiedGroupBuilder, actions.getModifyMemberLabelList());
         changeEpoch = Math.max(changeEpoch, MEMBER_LABEL_EPOCH);
       }
       groupChangeApplicator.applyModifyMemberProfileKeys(user, inviteLinkPassword, group.get(), modifiedGroupBuilder, actions.getModifyMemberProfileKeysList());
@@ -567,10 +567,13 @@ public class GroupsController {
 
       if (actions.hasModifyAttributesAccess()) groupChangeApplicator.applyModifyAttributesAccess(user, inviteLinkPassword, group.get(), modifiedGroupBuilder, actions.getModifyAttributesAccess());
       if (actions.hasModifyMemberAccess()) groupChangeApplicator.applyModifyMembersAccess(user, inviteLinkPassword, group.get(), modifiedGroupBuilder, actions.getModifyMemberAccess());
-
       if (actions.hasModifyAddFromInviteLinkAccess()) {
         groupChangeApplicator.applyModifyAddFromInviteLinkAccess(user, inviteLinkPassword, group.get(), modifiedGroupBuilder, actions.getModifyAddFromInviteLinkAccess());
         changeEpoch = Math.max(changeEpoch, INVITE_LINKS_CHANGE_EPOCH);
+      }
+      if (actions.hasModifyMemberLabelAccess()) {
+        groupChangeApplicator.applyModifyMemberLabelAccess(user, group.get(), modifiedGroupBuilder, actions.getModifyMemberLabelAccess());
+        changeEpoch = Math.max(changeEpoch, MEMBER_LABEL_EPOCH);
       }
       if (actions.getAddMembersPendingAdminApprovalCount() != 0) {
         groupChangeApplicator.applyAddMembersPendingAdminApproval(user, inviteLinkPassword, group.get(), modifiedGroupBuilder, actions.getAddMembersPendingAdminApprovalList());

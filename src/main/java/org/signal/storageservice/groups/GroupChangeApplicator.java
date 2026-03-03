@@ -60,7 +60,7 @@ public class GroupChangeApplicator {
       throw new ForbiddenException();
     }
 
-    if (addMembers.stream().anyMatch(member -> member.getAdded().getRole() == Member.Role.ADMINISTRATOR) && !GroupAuth.isAdminstrator(user, group)) {
+    if (addMembers.stream().anyMatch(member -> member.getAdded().getRole() == Member.Role.ADMINISTRATOR) && !GroupAuth.isAdministrator(user, group)) {
       throw new ForbiddenException();
     }
 
@@ -154,7 +154,7 @@ public class GroupChangeApplicator {
       throw new BadRequestException("duplicate members in to-modify list");
     }
 
-    if (!GroupAuth.isAdminstrator(user, group)) {
+    if (!GroupAuth.isAdministrator(user, group)) {
       throw new ForbiddenException();
     }
 
@@ -179,13 +179,9 @@ public class GroupChangeApplicator {
     modifiedGroupBuilder.clearMembers().addAllMembers(newMembership);
   }
 
-  public void applyModifyMemberLabel(GroupUser user, Group.Builder modifiedGroupBuilder, List<ModifyMemberLabelAction> modifyMemberLabels)
+  public void applyModifyMemberLabel(GroupUser user, Group group, Group.Builder modifiedGroupBuilder, List<ModifyMemberLabelAction> modifyMemberLabels)
           throws BadRequestException, ForbiddenException {
-    final Group group = modifiedGroupBuilder.build();
-
-    final boolean isAdmin = GroupAuth.getMember(user, group)
-        .orElseThrow(() -> new ForbiddenException())
-        .getRole() == Member.Role.ADMINISTRATOR;
+    final Member.Role userRole = GroupAuth.getMember(user, group).orElseThrow(() -> new ForbiddenException()).getRole();
 
     final Map<ByteString, Member.Builder> memberBuilders = modifiedGroupBuilder.getMembersBuilderList().stream()
         .collect(Collectors.toMap(Member.Builder::getUserId, Function.identity()));
@@ -208,9 +204,9 @@ public class GroupChangeApplicator {
       }
 
       // can only modify your own labels unless you are an administrator, in which case you can clear others'
-      if (!user.aciMatches(modifyMemberLabel.getUserId()) &&
-          !(isAdmin && modifyMemberLabel.getLabelEmoji().isEmpty() && modifyMemberLabel.getLabelString().isEmpty())) {
-        throw new ForbiddenException("can only set your own label, or clear other users' as admin");
+      if (!GroupAuth.isModifyMemberLabelAllowed(
+          group, userRole, user.aciMatches(modifyMemberLabel.getUserId()), modifyMemberLabel.getLabelString().isEmpty())) {
+        throw new ForbiddenException();
       }
 
       // can only modify labels of users in group
@@ -265,7 +261,7 @@ public class GroupChangeApplicator {
     }
 
     if (addMembersPendingProfileKey.stream().anyMatch(pending -> pending.getAdded().getMember().getRole() == Member.Role.ADMINISTRATOR) &&
-            !GroupAuth.isAdminstrator(user, group)) {
+            !GroupAuth.isAdministrator(user, group)) {
       throw new ForbiddenException();
     }
 
@@ -500,7 +496,7 @@ public class GroupChangeApplicator {
       throw new BadRequestException("illegal attributes-access setting");
     }
 
-    if (!GroupAuth.isAdminstrator(user, group)) {
+    if (!GroupAuth.isAdministrator(user, group)) {
       throw new ForbiddenException();
     }
 
@@ -517,7 +513,7 @@ public class GroupChangeApplicator {
       throw new BadRequestException("illegal modify-members-access setting");
     }
 
-    if (!GroupAuth.isAdminstrator(user, group)) {
+    if (!GroupAuth.isAdministrator(user, group)) {
       throw new ForbiddenException();
     }
 
@@ -536,6 +532,19 @@ public class GroupChangeApplicator {
     }
 
     modifiedGroupBuilder.setAccessControl(modifiedGroupBuilder.getAccessControlBuilder().setAddFromInviteLink(action.getAddFromInviteLinkAccess()));
+  }
+
+  public void applyModifyMemberLabelAccess(GroupUser user, Group group, Group.Builder modifiedGroupBuilder, GroupChange.Actions.ModifyMemberLabelAccessControlAction action) throws ForbiddenException, BadRequestException {
+    if (!GroupAuth.isModifyMemberLabelAccessControlAllowed(user, group)) {
+      throw new ForbiddenException();
+    }
+
+    if (action.getMemberLabelAccess() != AccessControl.AccessRequired.MEMBER &&
+        action.getMemberLabelAccess() != AccessControl.AccessRequired.ADMINISTRATOR) {
+      throw new BadRequestException("illegal member-label-access setting");
+    }
+
+    modifiedGroupBuilder.setAccessControl(modifiedGroupBuilder.getAccessControlBuilder().setMemberLabel(action.getMemberLabelAccess()));
   }
 
   public void applyAddMembersPendingAdminApproval(GroupUser user, byte[] inviteLinkPassword, Group group, Group.Builder modifiedGroupBuilder, List<GroupChange.Actions.AddMemberPendingAdminApprovalAction> actions) throws ForbiddenException {

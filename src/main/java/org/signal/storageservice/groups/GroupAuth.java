@@ -123,7 +123,7 @@ public class GroupAuth {
     return false;
   }
 
-  public static boolean isAdminstrator(GroupUser user, Group group) {
+  public static boolean isAdministrator(GroupUser user, Group group) {
     for (Member member : group.getMembersList()) {
       if (user.isMember(member, group.getPublicKey())) {
         return member.getRole() == Member.Role.ADMINISTRATOR;
@@ -180,7 +180,7 @@ public class GroupAuth {
   }
 
   public static boolean isDeleteMembersAllowed(GroupUser user, Group group, List<Actions.DeleteMemberAction> members) {
-    if (isAdminstrator(user, group)) {
+    if (isAdministrator(user, group)) {
       return true;
     }
 
@@ -188,7 +188,7 @@ public class GroupAuth {
   }
 
   public static boolean isDeleteMembersPendingProfileKeyAllowed(GroupUser user, Group group, List<Actions.DeleteMemberPendingProfileKeyAction> actions) {
-    if (isAdminstrator(user, group)) {
+    if (isAdministrator(user, group)) {
       return true;
     }
 
@@ -196,15 +196,19 @@ public class GroupAuth {
   }
 
   public static boolean isModifyAddFromInviteLinkAccessControlAllowed(GroupUser user, Group group) {
-    return isAdminstrator(user, group);
+    return isAdministrator(user, group);
+  }
+
+  public static boolean isModifyMemberLabelAccessControlAllowed(GroupUser user, Group group) {
+    return isAdministrator(user, group);
   }
 
   public static boolean isModifyInviteLinkPasswordAllowed(GroupUser user, Group group) {
-    return isAdminstrator(user, group);
+    return isAdministrator(user, group);
   }
 
   public static boolean isModifyAnnouncementsOnlyAllowed(GroupUser user, Group group) {
-    return isAdminstrator(user, group);
+    return isAdministrator(user, group);
   }
 
   public static boolean isAddMembersPendingAdminApprovalAllowed(GroupUser user, byte[] inviteLinkPassword, Group group) {
@@ -212,16 +216,25 @@ public class GroupAuth {
             MessageDigest.isEqual(group.getInviteLinkPassword().toByteArray(), inviteLinkPassword);
   }
 
+  public static boolean isModifyMemberLabelAllowed(Group group, Member.Role userRole, boolean isSelf, boolean isClear) {
+    // the only operation allowed on other members is an admin clearing labels
+    if (!isSelf) {
+      return userRole == Member.Role.ADMINISTRATOR && isClear;
+    }
+
+    return userRole == Member.Role.ADMINISTRATOR || isClear || group.getAccessControl().getMemberLabel() != AccessRequired.ADMINISTRATOR;
+  }
+
   public static boolean isDeleteMembersPendingAdminApprovalAllowed(GroupUser user, Group group, List<Actions.DeleteMemberPendingAdminApprovalAction> actions) {
-    return isAdminstrator(user, group) || (actions.size() == 1 && user.isMember(actions.get(0).getDeletedUserId(), group.getPublicKey()));
+    return isAdministrator(user, group) || (actions.size() == 1 && user.isMember(actions.get(0).getDeletedUserId(), group.getPublicKey()));
   }
 
   public static boolean isPromoteMembersPendingAdminApprovalAllowed(GroupUser user, Group group) {
-    return isAdminstrator(user, group);
+    return isAdministrator(user, group);
   }
 
   public static boolean isAllowedToInitiateGroupCall(GroupUser user, Group group) {
-    return !group.getAnnouncementsOnly() || isAdminstrator(user, group);
+    return !group.getAnnouncementsOnly() || isAdministrator(user, group);
   }
 
   public static boolean isDeleteMembersBannedAllowed(GroupUser user, Group group) {
@@ -239,6 +252,6 @@ public class GroupAuth {
   }
 
   public static boolean isAddMembersBannedAllowed(GroupUser user, Group group) {
-    return isAdminstrator(user, group);
+    return isAdministrator(user, group);
   }
 }
