@@ -64,6 +64,7 @@ import org.signal.storageservice.storage.protos.groups.GroupChange.Actions.Delet
 import org.signal.storageservice.storage.protos.groups.GroupChange.Actions.ModifyAvatarAction;
 import org.signal.storageservice.storage.protos.groups.GroupChange.Actions.ModifyTitleAction;
 import org.signal.storageservice.storage.protos.groups.GroupChange.Actions.PromoteMemberPendingPniAciProfileKeyAction;
+import org.signal.storageservice.storage.protos.groups.GroupChange.Actions.TerminateGroupAction;
 import org.signal.storageservice.storage.protos.groups.GroupChangeResponse;
 import org.signal.storageservice.storage.protos.groups.GroupChanges;
 import org.signal.storageservice.storage.protos.groups.GroupChanges.GroupChangeState;
@@ -573,6 +574,56 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
   }
 
   @Test
+  void testGetTerminatedGroup() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation =
+      new ClientZkProfileOperations(
+          AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(
+              groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentation =
+      new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(
+          groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR))
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.DEFAULT))
+        .setTerminated(true)
+        .build();
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    Response response = resources.getJerseyTest()
+                                 .target("/v2/groups/")
+                                 .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+                                 .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+                                 .get();
+
+    assertThat(response.getStatus()).isEqualTo(200);
+    assertThat(response.hasEntity()).isTrue();
+    assertThat(response.getMediaType().toString()).isEqualTo("application/x-protobuf");
+
+    final GroupResponse actual = GroupResponse.parseFrom(response.readEntity(InputStream.class).readAllBytes());
+    assertThat(actual.getGroupSendEndorsementsResponse()).isEmpty();
+    assertThat(actual.getGroup()).isEqualTo(group);
+  }
+
+  @Test
   void testGetGroupPendingMember() throws Exception {
     GroupSecretParams groupSecretParams = GroupSecretParams.generate();
     GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
@@ -1014,6 +1065,61 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
   }
 
   @Test
+  void testModifyGroupTitleTerminatedGroup() {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation =
+      new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(
+          groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentation =
+      new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(
+          groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.ADMINISTRATOR))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.DEFAULT)
+            .build())
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .setTerminated(true)
+        .build();
+
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
+        .setVersion(1)
+        .setModifyTitle(ModifyTitleAction.newBuilder()
+            .setTitle(ByteString.copyFromUtf8("Another title")))
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_TWO_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(423);
+
+    verify(groupsManager).getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())));
+    verifyNoMoreInteractions(groupsManager);
+  }
+
+  @Test
   void testModifyGroupTitleAndUnknownField() {
     GroupSecretParams groupSecretParams = GroupSecretParams.generate();
     GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
@@ -1208,6 +1314,58 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
         AuthHelper.VALID_USER, List.of(AuthHelper.VALID_USER_TWO), groupSecretParams, responseProto.getGroupSendEndorsementsResponse(), issueTime, lastValidTime);
   }
 
+  @Test
+  void testModifyGroupDescriptionTerminated() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setDescription(ByteString.copyFromUtf8("Some description"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.DEFAULT)
+            .build())
+        .setTerminated(true)
+        .build();
+
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    GroupChange.Actions groupChange = Actions.newBuilder()
+        .setVersion(1)
+        .setModifyDescription(Actions.ModifyDescriptionAction.newBuilder()
+            .setDescription(ByteString.copyFromUtf8("Another description")))
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(423);
+
+    verify(groupsManager).getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())));
+    verifyNoMoreInteractions(groupsManager);
+  }
+
   @ParameterizedTest
   @MethodSource("generateIssueTimesForGroupSendEndorsements")
   void testModifyGroupAnnouncementsOnly(final Instant issueTime, final Instant lastValidTime) throws Exception {
@@ -1301,6 +1459,56 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
         new NotarySignature(signedChange.getServerSignature().toByteArray()));
     assertValidSendEndorsements(
         AuthHelper.VALID_USER, List.of(AuthHelper.VALID_USER_TWO), groupSecretParams, responseProto.getGroupSendEndorsementsResponse(), issueTime, lastValidTime);
+  }
+
+  @Test
+  void testModifyGroupAnnouncementsOnlyTerminated() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.DEFAULT)
+            .build())
+        .setTerminated(true)
+        .build();
+
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    GroupChange.Actions groupChange = Actions.newBuilder()
+        .setVersion(1)
+        .setModifyAnnouncementsOnly(Actions.ModifyAnnouncementsOnlyAction.newBuilder().setAnnouncementsOnly(true))
+        .build();
+
+    final Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(423);
+
+    verify(groupsManager).getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())));
+    verifyNoMoreInteractions(groupsManager);
   }
 
   @ParameterizedTest
@@ -1482,6 +1690,58 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
     assertValidSendEndorsements(
         AuthHelper.VALID_USER, List.of(AuthHelper.VALID_USER_TWO), groupSecretParams, responseProto.getGroupSendEndorsementsResponse(), issueTime, lastValidTime);
+  }
+
+  @Test
+  void testModifyGroupTimerTerminated() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.DEFAULT)
+            .build())
+        .setTerminated(true)
+        .build();
+
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    GroupChange.Actions groupChange = Actions.newBuilder()
+        .setVersion(1)
+        .setModifyDisappearingMessageTimer(Actions.ModifyDisappearingMessageTimerAction.newBuilder()
+            .setTimer(ByteString.copyFromUtf8("Another timer"))
+            .build())
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(423);
+
+    verify(groupsManager).getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())));
+    verifyNoMoreInteractions(groupsManager);
   }
 
   @Test
@@ -1678,6 +1938,57 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
   }
 
   @Test
+  void testDeleteMemberTerminated() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.DEFAULT)
+            .build())
+        .setTerminated(true)
+        .build();
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
+        .setVersion(1)
+        .addDeleteMembers(Actions.DeleteMemberAction.newBuilder()
+            .setDeletedUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+            .build())
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(423);
+
+    verify(groupsManager).getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())));
+    verifyNoMoreInteractions(groupsManager);
+  }
+
+  @Test
   void testDeleteMemberUnauthorized() {
     GroupSecretParams groupSecretParams = GroupSecretParams.generate();
     GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
@@ -1820,6 +2131,55 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
     AuthHelper.GROUPS_SERVER_KEY.getPublicParams().verifySignature(signedChange.getActions().toByteArray(),
                                                                    new NotarySignature(signedChange.getServerSignature().toByteArray()));
+  }
+
+  @Test
+  void testAddMemberTerminated() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .setTerminated(true)
+        .build();
+
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
+        .setVersion(1)
+        .addAddMembers(Actions.AddMemberAction.newBuilder()
+            .setAdded(Member.newBuilder()
+                .setPresentation(ByteString.copyFrom(validUserTwoPresentation.serialize()))
+                .setRole(Member.Role.DEFAULT)
+                .build()))
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(423);
+
+    verify(groupsManager).getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())));
+    verifyNoMoreInteractions(groupsManager);
   }
 
   @ParameterizedTest
@@ -2320,6 +2680,58 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
   }
 
   @Test
+  void testModifyMemberPresentationTerminated() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentationUpdate = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.DEFAULT)
+            .build())
+        .setTerminated(true)
+        .build();
+
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
+        .setVersion(1)
+        .addModifyMemberProfileKeys(Actions.ModifyMemberProfileKeyAction.newBuilder()
+            .setPresentation(ByteString.copyFrom(validUserTwoPresentationUpdate.serialize())))
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_TWO_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(423);
+
+    verify(groupsManager).getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())));
+    verifyNoMoreInteractions(groupsManager);
+  }
+
+  @Test
   void testModifyMemberPresentationUnauthorized() {
     GroupSecretParams groupSecretParams = GroupSecretParams.generate();
     GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
@@ -2458,6 +2870,57 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
     AuthHelper.GROUPS_SERVER_KEY.getPublicParams().verifySignature(signedChange.getActions().toByteArray(),
                                                                    new NotarySignature(signedChange.getServerSignature().toByteArray()));
 
+  }
+
+  @Test
+  void testAddMemberPendingProfileKeyTerminated() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .setTerminated(true)
+        .build();
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    GroupChange.Actions groupChange = Actions.newBuilder()
+        .setVersion(1)
+        .addAddMembersPendingProfileKey(Actions.AddMemberPendingProfileKeyAction.newBuilder()
+            .setAdded(MemberPendingProfileKey.newBuilder()
+                .setMember(Member.newBuilder()
+                    .setRole(Member.Role.DEFAULT)
+                    .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+                    .build())
+                .build())
+            .build())
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(423);
+
+    verify(groupsManager).getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())));
+    verifyNoMoreInteractions(groupsManager);
   }
 
   @Test
@@ -2649,6 +3112,59 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
     AuthHelper.GROUPS_SERVER_KEY.getPublicParams().verifySignature(signedChange.getActions().toByteArray(),
                                                                    new NotarySignature(signedChange.getServerSignature().toByteArray()));
 
+  }
+
+  @Test
+  void testDeleteMemberPendingProfileKeyTerminated() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .addMembersPendingProfileKey(MemberPendingProfileKey.newBuilder()
+            .setAddedByUserId(ByteString.copyFromUtf8("someone"))
+            .setTimestamp(System.currentTimeMillis())
+            .setMember(Member.newBuilder()
+                .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+                .setRole(Member.Role.DEFAULT)
+                .build())
+            .build())
+        .setTerminated(true)
+        .build();
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    GroupChange.Actions groupChange = Actions.newBuilder()
+        .setVersion(1)
+        .addDeleteMembersPendingProfileKey(Actions.DeleteMemberPendingProfileKeyAction.newBuilder()
+            .setDeletedUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize())))
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(423);
+
+    verify(groupsManager).getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())));
+    verifyNoMoreInteractions(groupsManager);
   }
 
   void testDeleteMemberPendingProfileKeyAsInvitee(final Instant issueTime, final Instant lastValidTime) throws Exception {
@@ -2892,6 +3408,59 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
     AuthHelper.GROUPS_SERVER_KEY.getPublicParams().verifySignature(signedChange.getActions().toByteArray(),
         new NotarySignature(signedChange.getServerSignature().toByteArray()));
+  }
+
+  @Test
+  void testAcceptMemberPendingProfileKeyInvitationTerminated() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.ADMINISTRATOR)
+            .setAttributes(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .addMembersPendingProfileKey(MemberPendingProfileKey.newBuilder()
+            .setAddedByUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setTimestamp(System.currentTimeMillis())
+            .setMember(Member.newBuilder()
+                .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+                .setRole(Member.Role.DEFAULT)
+                .build())
+            .build())
+        .setTerminated(true)
+        .build();
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    GroupChange.Actions groupChange = Actions.newBuilder()
+        .setVersion(1)
+        .addPromoteMembersPendingProfileKey(Actions.PromoteMemberPendingProfileKeyAction.newBuilder()
+            .setPresentation(ByteString.copyFrom(validUserTwoPresentation.serialize())))
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_TWO_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(423);
+
+    verify(groupsManager).getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())));
+    verifyNoMoreInteractions(groupsManager);
   }
 
   @Test
@@ -3346,6 +3915,55 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
   }
 
+  void testModifyMembersRoleTerminated() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.DEFAULT)
+            .build())
+        .setTerminated(true)
+        .build();
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
+        .setVersion(1)
+        .setModifyMemberAccess(Actions.ModifyMembersAccessControlAction.newBuilder()
+            .setMembersAccess(AccessControl.AccessRequired.ADMINISTRATOR))
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(423);
+
+    verify(groupsManager).getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())));
+    verifyNoMoreInteractions(groupsManager);
+  }
+
   @Test
   void testModifyMembersAccessRoleUnauthorized() {
     GroupSecretParams groupSecretParams = GroupSecretParams.generate();
@@ -3492,6 +4110,58 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
   }
 
   @Test
+  void testModifyMemberRoleTerminated() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.DEFAULT)
+            .build())
+        .setTerminated(true)
+        .build();
+
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
+        .setVersion(1)
+        .addModifyMemberRoles(Actions.ModifyMemberRoleAction.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR).build())
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(423);
+
+    verify(groupsManager).getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())));
+    verifyNoMoreInteractions(groupsManager);
+  }
+
+  @Test
   void testModifyMemberRoleUnauthorized() {
     GroupSecretParams groupSecretParams = GroupSecretParams.generate();
     GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
@@ -3631,6 +4301,52 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
       new NotarySignature(signedChange.getServerSignature().toByteArray()));
   }
 
+  @Test
+  void testModifyMemberLabelAccessTerminated() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation =
+      new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams())
+          .createProfileKeyCredentialPresentation(
+            groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder())
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .setTerminated(true)
+        .build();
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
+        .setVersion(1)
+        .setModifyMemberLabelAccess(
+            Actions.ModifyMemberLabelAccessControlAction.newBuilder()
+                .setMemberLabelAccess(AccessControl.AccessRequired.ADMINISTRATOR))
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(423);
+
+    verify(groupsManager).getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())));
+    verifyNoMoreInteractions(groupsManager);
+  }
+
   @ParameterizedTest
   @MethodSource("generateIssueTimesForGroupSendEndorsements")
   void testModifyMemberLabel(final Instant issueTime, final Instant lastValidTime) throws Exception {
@@ -3683,7 +4399,7 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
     GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
         .setVersion(1)
-        .addModifyMemberLabel(
+        .addModifyMemberLabels(
             Actions.ModifyMemberLabelAction.newBuilder()
                 .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
                 .setLabelEmoji(ByteString.copyFromUtf8("emoji ciphertext"))
@@ -3733,6 +4449,66 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
     AuthHelper.GROUPS_SERVER_KEY.getPublicParams().verifySignature(signedChange.getActions().toByteArray(),
       new NotarySignature(signedChange.getServerSignature().toByteArray()));
+  }
+
+  @Test
+  void testModifyMemberLabelTerminated() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation =
+      new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams())
+          .createProfileKeyCredentialPresentation(
+            groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+
+    ProfileKeyCredentialPresentation validUserTwoPresentation =
+      new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams())
+          .createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER)
+            .setMemberLabel(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.DEFAULT)
+            .build())
+        .setTerminated(true)
+        .build();
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
+        .setVersion(1)
+        .addModifyMemberLabels(
+            Actions.ModifyMemberLabelAction.newBuilder()
+                .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+                .setLabelEmoji(ByteString.copyFromUtf8("emoji ciphertext"))
+                .setLabelString(ByteString.copyFromUtf8("label ciphertext")))
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_TWO_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(423);
+
+    verify(groupsManager).getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())));
+    verifyNoMoreInteractions(groupsManager);
   }
 
   @ParameterizedTest
@@ -3789,7 +4565,7 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
     GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
         .setVersion(1)
-        .addModifyMemberLabel(
+        .addModifyMemberLabels(
             Actions.ModifyMemberLabelAction.newBuilder()
                 .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
                 .setLabelString(ByteString.copyFromUtf8("label ciphertext")))
@@ -3897,7 +4673,7 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
     GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
         .setVersion(1)
-        .addModifyMemberLabel(
+        .addModifyMemberLabels(
             Actions.ModifyMemberLabelAction.newBuilder()
                 .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize())))
         .build();
@@ -3990,7 +4766,7 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
     GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
         .setVersion(1)
-        .addModifyMemberLabel(
+        .addModifyMemberLabels(
             Actions.ModifyMemberLabelAction.newBuilder()
                 .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
                 .setLabelEmoji(ByteString.copyFromUtf8("emoji ciphertext"))
@@ -4069,10 +4845,10 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
     GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
         .setVersion(1)
-        .addModifyMemberLabel(
+        .addModifyMemberLabels(
             Actions.ModifyMemberLabelAction.newBuilder()
                 .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize())))
-        .addModifyMemberLabel(
+        .addModifyMemberLabels(
             Actions.ModifyMemberLabelAction.newBuilder()
                 .setUserId(ByteString.copyFrom(validUserThreePresentation.getUuidCiphertext().serialize())))
         .build();
@@ -4167,7 +4943,7 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
     GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
         .setVersion(1)
-        .addModifyMemberLabel(
+        .addModifyMemberLabels(
             Actions.ModifyMemberLabelAction.newBuilder()
                 .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
                 .setLabelEmoji(ByteString.copyFromUtf8("emoji ciphertext"))
@@ -4226,7 +5002,7 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
     GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
         .setVersion(1)
-        .addModifyMemberLabel(
+        .addModifyMemberLabels(
             Actions.ModifyMemberLabelAction.newBuilder()
                 .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
                 .setLabelEmoji(ByteString.copyFromUtf8("emoji ciphertext")))
@@ -4284,7 +5060,7 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
     GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
         .setVersion(1)
-        .addModifyMemberLabel(
+        .addModifyMemberLabels(
             Actions.ModifyMemberLabelAction.newBuilder()
                 .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
                 .setLabelEmoji(ByteString.copyFrom(new byte[GroupChangeApplicator.MAX_LABEL_EMOJI_CIPHERTEXT_LENGTH + 1]))
@@ -4343,7 +5119,7 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
     GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
         .setVersion(1)
-        .addModifyMemberLabel(
+        .addModifyMemberLabels(
             Actions.ModifyMemberLabelAction.newBuilder()
                 .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
                 .setLabelEmoji(ByteString.copyFromUtf8("emoji ciphertext"))
@@ -4357,6 +5133,166 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
         .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
 
     assertThat(response.getStatus()).isEqualTo(400);
+
+    verify(groupsManager).getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())));
+    verifyNoMoreInteractions(groupsManager);
+  }
+
+  @Test
+  void testTerminateGroup() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation =
+      new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams())
+          .createProfileKeyCredentialPresentation(
+            groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+
+    ProfileKeyCredentialPresentation validUserTwoPresentation =
+      new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams())
+          .createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER)
+            .setMemberLabel(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.DEFAULT)
+            .build())
+        .build();
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    when(groupsManager.updateGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())), any(Group.class)))
+        .thenReturn(CompletableFuture.completedFuture(Optional.empty()));
+
+    when(
+        groupsManager.appendChangeRecord(
+            eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())),
+            eq(1),
+            any(GroupChange.class),
+            any(Group.class)))
+        .thenReturn(CompletableFuture.completedFuture(true));
+
+    GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
+        .setVersion(1)
+        .setTerminateGroup(TerminateGroupAction.newBuilder())
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(200);
+    assertThat(response.hasEntity()).isTrue();
+    assertThat(response.getMediaType().toString()).isEqualTo("application/x-protobuf");
+
+    final GroupChangeResponse responseProto = GroupChangeResponse.parseFrom(response.readEntity(InputStream.class).readAllBytes());
+    final GroupChange signedChange = responseProto.getGroupChange();
+
+    ArgumentCaptor<Group> captor = ArgumentCaptor.forClass(Group.class);
+    ArgumentCaptor<GroupChange> changeCaptor = ArgumentCaptor.forClass(GroupChange.class);
+
+    verify(groupsManager).updateGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())), captor.capture());
+    verify(groupsManager).appendChangeRecord(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())), eq(1), changeCaptor.capture(), any(Group.class));
+
+    assertThat(captor.getValue().getTerminated()).isTrue();
+    assertThat(captor.getValue().getVersion()).isEqualTo(1);
+
+    assertThat(
+        captor.getValue().toBuilder()
+            .clearTerminated()
+            .setVersion(0)
+            .build())
+        .isEqualTo(group);
+
+    assertThat(signedChange).isEqualTo(changeCaptor.getValue());
+    assertThat(Actions.parseFrom(signedChange.getActions()).getGroupId()).isEqualTo(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()));
+    assertThat(Actions.parseFrom(signedChange.getActions()).getVersion()).isEqualTo(1);
+    assertThat(Actions.parseFrom(signedChange.getActions()).getSourceUserId()).isEqualTo(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()));
+    assertThat(Actions.parseFrom(signedChange.getActions()).toBuilder().clearGroupId().clearSourceUserId().build()).isEqualTo(groupChange);
+    assertThat(responseProto.getGroupSendEndorsementsResponse()).isEmpty();
+
+    AuthHelper.GROUPS_SERVER_KEY.getPublicParams().verifySignature(signedChange.getActions().toByteArray(),
+      new NotarySignature(signedChange.getServerSignature().toByteArray()));
+  }
+
+  @Test
+  void testTerminateGroupUnauthorized() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation =
+      new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams())
+          .createProfileKeyCredentialPresentation(
+            groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+
+    ProfileKeyCredentialPresentation validUserTwoPresentation =
+      new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams())
+          .createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER)
+            .setMemberLabel(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.DEFAULT)
+            .build())
+        .build();
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    when(groupsManager.updateGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())), any(Group.class)))
+        .thenReturn(CompletableFuture.completedFuture(Optional.empty()));
+
+    when(
+        groupsManager.appendChangeRecord(
+            eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())),
+            eq(1),
+            any(GroupChange.class),
+            any(Group.class)))
+        .thenReturn(CompletableFuture.completedFuture(true));
+
+    GroupChange.Actions groupChange = GroupChange.Actions.newBuilder()
+        .setVersion(1)
+        .setTerminateGroup(TerminateGroupAction.newBuilder())
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_TWO_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(403);
 
     verify(groupsManager).getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())));
     verifyNoMoreInteractions(groupsManager);
@@ -4483,6 +5419,130 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
     }
     assertThat(receivedChanges.toBuilder().clearGroupSendEndorsementsResponse().build())
         .isEqualTo(GroupChanges.newBuilder().addAllGroupChanges(expectedChanges).build());
+  }
+
+  @Test
+  void testGetGroupLogsTerminated() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(6)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.DEFAULT)
+            .setJoinedAtVersion(0)
+            .build())
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .setTerminated(true)
+        .build();
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    List<GroupChangeState> expectedChanges = new LinkedList<>() {{
+      add(GroupChangeState.newBuilder()
+          .setGroupChange(GroupChange.newBuilder()
+              .setActions(Actions.newBuilder()
+                  .setModifyTitle(ModifyTitleAction.newBuilder()
+                      .setTitle(ByteString.copyFromUtf8("First title"))
+                      .build())
+                  .build()
+                  .toByteString()))
+          .setGroupState(group.toBuilder().setTitle(ByteString.copyFromUtf8("First title")).clearTerminated().build())
+          .build());
+
+      add(GroupChangeState.newBuilder()
+          .setGroupChange(GroupChange.newBuilder()
+              .setActions(Actions.newBuilder()
+                  .setModifyTitle(ModifyTitleAction.newBuilder()
+                      .setTitle(ByteString.copyFromUtf8("Second title"))
+                      .build())
+                  .build()
+                  .toByteString())
+              .build())
+          .setGroupState(group.toBuilder().setTitle(ByteString.copyFromUtf8("Second title")).clearTerminated().build())
+          .build());
+
+      add(GroupChangeState.newBuilder()
+          .setGroupChange(GroupChange.newBuilder()
+              .setActions(Actions.newBuilder()
+                  .setModifyTitle(ModifyTitleAction.newBuilder()
+                      .setTitle(ByteString.copyFromUtf8("Some title"))
+                      .build())
+                  .build()
+                  .toByteString())
+              .build())
+          .setGroupState(group.toBuilder().setTitle(ByteString.copyFromUtf8("Some title")).clearTerminated().build())
+          .build());
+
+      String firstAvatar = avatarFor(groupPublicParams.getGroupIdentifier().serialize());
+
+      add(GroupChangeState.newBuilder()
+          .setGroupChange(GroupChange.newBuilder()
+              .setActions(Actions.newBuilder()
+                  .setModifyAvatar(ModifyAvatarAction.newBuilder()
+                      .setAvatar(firstAvatar).build())
+                  .build()
+                  .toByteString())
+              .build())
+          .setGroupState(group.toBuilder().setTitle(ByteString.copyFromUtf8("Some title")).setAvatarUrl(firstAvatar).clearTerminated().build())
+          .build());
+
+      String secondAvatar = avatarFor(groupPublicParams.getGroupIdentifier().serialize());
+
+      add(GroupChangeState.newBuilder()
+          .setGroupChange(GroupChange.newBuilder()
+              .setActions(Actions.newBuilder()
+                  .setModifyAvatar(ModifyAvatarAction.newBuilder()
+                      .setAvatar(secondAvatar).build())
+                  .build()
+                  .toByteString())
+              .build())
+          .setGroupState(group.toBuilder().setTitle(ByteString.copyFromUtf8("Some title")).setAvatarUrl(secondAvatar).clearTerminated().build())
+          .build());
+
+      add(GroupChangeState.newBuilder()
+          .setGroupChange(GroupChange.newBuilder()
+              .setActions(Actions.newBuilder()
+                  .setTerminateGroup(TerminateGroupAction.newBuilder())
+                  .build()
+                  .toByteString())
+              .build())
+          .setGroupState(group)
+          .build());
+    }};
+
+    when(groupsManager.getChangeRecords(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())), eq(group), isNull(), eq(false), eq(false), eq(1), eq(7)))
+        .thenReturn(CompletableFuture.completedFuture(expectedChanges));
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/logs/1")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+        .header("Cached-Send-Endorsements", "0")
+        .get();
+
+    assertThat(response.getStatus()).isEqualTo(200);
+    assertThat(response.hasEntity()).isTrue();
+
+    GroupChanges receivedChanges = GroupChanges.parseFrom(response.readEntity(InputStream.class).readAllBytes());
+    assertThat(receivedChanges.getGroupSendEndorsementsResponse()).isEmpty();
+    assertThat(receivedChanges.getGroupChangesList()).containsExactlyElementsOf(expectedChanges);
   }
 
   @Test
@@ -4787,7 +5847,7 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
   @ParameterizedTest
   @MethodSource
-  void testGetAvatarUpload(AccessControl.AccessRequired accessRequired, boolean isMemberAdmin, int expectedMemberStatusCode) throws IOException {
+  void testGetAvatarUpload(AccessControl.AccessRequired accessRequired, boolean isMemberAdmin, boolean groupIsTerminated, int expectedMemberStatusCode) throws IOException {
     GroupSecretParams groupSecretParams = GroupSecretParams.generate();
     GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
 
@@ -4823,6 +5883,7 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
             .setRole(Member.Role.ADMINISTRATOR)
             .setJoinedAtVersion(1)
             .build())
+        .setTerminated(groupIsTerminated)
         .build();
 
     when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
@@ -4864,10 +5925,11 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
   static List<Arguments> testGetAvatarUpload() {
     return List.of(
-        Arguments.of(AccessControl.AccessRequired.MEMBER, true, 200),
-        Arguments.of(AccessControl.AccessRequired.MEMBER, false, 200),
-        Arguments.of(AccessControl.AccessRequired.ADMINISTRATOR, true, 200),
-        Arguments.of(AccessControl.AccessRequired.ADMINISTRATOR, false, 403)
+        Arguments.of(AccessControl.AccessRequired.MEMBER, true, false, 200),
+        Arguments.of(AccessControl.AccessRequired.MEMBER, false, false, 200),
+        Arguments.of(AccessControl.AccessRequired.ADMINISTRATOR, true, false, 200),
+        Arguments.of(AccessControl.AccessRequired.ADMINISTRATOR, false, false, 403),
+        Arguments.of(AccessControl.AccessRequired.MEMBER, false, true, 423)
     );
   }
 
@@ -4917,6 +5979,47 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
 
     assertThat(credential.getToken()).isNotBlank();
     assertThat(credential.getToken().split(":").length).isEqualTo(6);
+  }
+
+  void testGetGroupCredentialTokenTerminated() throws Exception {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.DEFAULT)
+            .build())
+        .setTerminated(true)
+        .build();
+
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/token")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+        .get();
+
+    assertThat(response.getStatus()).isEqualTo(423);
   }
 
   @Test

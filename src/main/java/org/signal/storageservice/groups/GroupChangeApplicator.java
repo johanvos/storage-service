@@ -746,4 +746,11 @@ public class GroupChangeApplicator {
     actions.stream().map(GroupChange.Actions.AddMemberBannedAction::getAdded).forEach(modifiedGroupBuilder::addMembersBanned);
     return true;
   }
+
+  public void applyTerminateGroup(GroupUser user, Group group, Group.Builder modifiedGroupBuilder) {
+    if (!GroupAuth.isAdministrator(user, group)) {
+      throw new ForbiddenException();
+    }
+    modifiedGroupBuilder.setTerminated(true);
+  }
 }
