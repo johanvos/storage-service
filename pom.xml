@@ -31,8 +31,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <configuration.path>config</configuration.path>
 
-        <!-- eclipse-temurin:21.0.6_7-jre-jammy -->
-        <docker.image.sha256>02fc89fa8766a9ba221e69225f8d1c10bb91885ddbd3c112448e23488ba40ab6</docker.image.sha256>
+        <docker.image>eclipse-temurin:25-jre-jammy@sha256:305fb0c3e5f47ea70ed6670845deb8bddbc362ad4c42354e85273ec9a31bd064</docker.image>
 
         <dropwizard.version>4.0.17</dropwizard.version>
 
@@ -291,8 +290,8 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.15.0</version>
                 <configuration>
-                    <source>21</source>
-                    <target>21</target>
+                    <source>25</source>
+                    <target>25</target>
                 </configuration>
             </plugin>
             <plugin>
@@ -432,7 +431,7 @@
                         </executions>
                         <configuration>
                             <from>
-                                <image>eclipse-temurin@sha256:${docker.image.sha256}</image>
+                                <image>${docker.image}</image>
                                 <platforms>
                                     <platform>
                                         <architecture>amd64</architecture>
