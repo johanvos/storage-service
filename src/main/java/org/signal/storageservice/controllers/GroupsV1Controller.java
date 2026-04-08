@@ -10,6 +10,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import jakarta.validation.constraints.NotNull;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
@@ -89,7 +90,7 @@ public class GroupsV1Controller extends GroupsController {
   @PUT
   @Produces(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
   @Consumes(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
-  public CompletableFuture<Response> createGroup(@Auth GroupUser user, @NoUnknownFields Group group) {
+  public CompletableFuture<Response> createGroup(@Auth GroupUser user, @NotNull @NoUnknownFields Group group) {
     return super.createGroup(user, group)
         .thenApply(response -> Response.fromResponse(response).entity(null).build());
   }
@@ -102,7 +103,7 @@ public class GroupsV1Controller extends GroupsController {
       @Auth GroupUser user,
       @HeaderParam(jakarta.ws.rs.core.HttpHeaders.USER_AGENT) String userAgent,
       @QueryParam("inviteLinkPassword") String inviteLinkPasswordString,
-      @NoUnknownFields GroupChange.Actions submittedActions) {
+      @NotNull @NoUnknownFields GroupChange.Actions submittedActions) {
     return super.modifyGroup(user, userAgent, inviteLinkPasswordString, submittedActions)
         .thenApply(response -> {
               if (response.getEntity() instanceof final GroupChangeResponse gcr) {

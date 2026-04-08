@@ -23,6 +23,9 @@ public class NoUnknownFieldsValidator implements ConstraintValidator<NoUnknownFi
 
   @Override
   public boolean isValid(Message value, ConstraintValidatorContext context) {
+    if (value == null) {
+      return true;
+    }
     if (!value.getUnknownFields().asMap().isEmpty()) return false;
     if (recursive) {
       for (Map.Entry<Descriptors.FieldDescriptor, Object> entry : value.getAllFields().entrySet()) {

@@ -35,10 +35,12 @@ import jakarta.ws.rs.client.Entity;
 import jakarta.ws.rs.core.Response;
 import org.apache.http.HttpHeaders;
 import org.apache.http.HttpStatus;
+import org.glassfish.jersey.client.ClientProperties;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.signal.libsignal.protocol.ServiceId;
 import org.signal.libsignal.zkgroup.NotarySignature;
@@ -523,6 +525,27 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
                                  .put(Entity.entity(group.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
 
     assertThat(response.getStatus()).isEqualTo(400);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"PUT", "PATCH"})
+  void testCreateModifyGroupNull(final String method) {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    when(groupsManager.createGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())),
+        any(Group.class)))
+        .thenReturn(CompletableFuture.completedFuture(true));
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+        // required for `null` entity with PUT/PATCH
+        .property(ClientProperties.SUPPRESS_HTTP_COMPLIANCE_VALIDATION, true)
+        .method(method);
+
+    assertThat(response.getStatus()).isEqualTo(422);
   }
 
   @ParameterizedTest

@@ -33,6 +33,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import jakarta.validation.constraints.NotNull;
 import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DefaultValue;
@@ -401,7 +402,7 @@ public class GroupsController {
   @PUT
   @Produces(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
   @Consumes(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
-  public CompletableFuture<Response> createGroup(@Auth GroupUser user, @NoUnknownFields Group group) {
+  public CompletableFuture<Response> createGroup(@Auth GroupUser user, @NotNull @NoUnknownFields Group group) {
     final Timer.Sample sample = Timer.start();
 
     if (group.getVersion() != 0) {
@@ -515,7 +516,7 @@ public class GroupsController {
       @Auth GroupUser user,
       @HeaderParam(jakarta.ws.rs.core.HttpHeaders.USER_AGENT) String userAgent,
       @QueryParam("inviteLinkPassword") String inviteLinkPasswordString,
-      @NoUnknownFields GroupChange.Actions submittedActions) {
+      @NotNull @NoUnknownFields GroupChange.Actions submittedActions) {
     final Timer.Sample sample = Timer.start();
 
     final byte[] inviteLinkPassword;
