@@ -13,8 +13,7 @@ import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.Timer;
-import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
+import jakarta.validation.constraints.NotNull;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
@@ -27,6 +26,7 @@ import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.Response.Status;
+import java.util.concurrent.CompletableFuture;
 import org.signal.storageservice.auth.User;
 import org.signal.storageservice.metrics.UserAgentTagUtil;
 import org.signal.storageservice.providers.ProtocolBufferMediaType;
@@ -85,7 +85,7 @@ public class StorageController {
   @PUT
   @Consumes(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
   @Produces(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
-  public CompletableFuture<Response> write(@Auth User user, @HeaderParam(HttpHeaders.USER_AGENT) String userAgent, WriteOperation writeOperation) {
+  public CompletableFuture<Response> write(@Auth User user, @HeaderParam(HttpHeaders.USER_AGENT) String userAgent, @NotNull WriteOperation writeOperation) {
     final Timer timer = Metrics.timer(name(StorageController.class, "write"));
     final Timer.Sample sample = Timer.start();
 
@@ -136,7 +136,7 @@ public class StorageController {
   @Path("/read")
   @Consumes(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
   @Produces(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
-  public CompletableFuture<StorageItems> read(@Auth User user, @HeaderParam(HttpHeaders.USER_AGENT) String userAgent, ReadOperation readOperation) {
+  public CompletableFuture<StorageItems> read(@Auth User user, @HeaderParam(HttpHeaders.USER_AGENT) String userAgent, @NotNull ReadOperation readOperation) {
     final Timer timer = Metrics.timer(name(StorageController.class, "read"));
     final Timer.Sample sample = Timer.start();
 

@@ -39,6 +39,7 @@ import org.signal.storageservice.auth.User;
 import org.signal.storageservice.providers.InvalidProtocolBufferExceptionMapper;
 import org.signal.storageservice.providers.ProtocolBufferMediaType;
 import org.signal.storageservice.providers.ProtocolBufferMessageBodyProvider;
+import org.signal.storageservice.providers.ProtocolBufferValidationErrorMessageBodyWriter;
 import org.signal.storageservice.storage.StorageItemsTable;
 import org.signal.storageservice.storage.StorageManager;
 import org.signal.storageservice.storage.protos.contacts.ReadOperation;
@@ -55,14 +56,16 @@ class StorageControllerTest {
   private final StorageManager storageManager = mock(StorageManager.class);
 
   public final ResourceExtension resources = ResourceExtension.builder()
-                                                              .addProvider(AuthHelper.getAuthFilter())
-                                                              .addProvider(new AuthValueFactoryProvider.Binder<>(User.class))
-                                                              .addProvider(new ProtocolBufferMessageBodyProvider())
-                                                              .addProvider(new InvalidProtocolBufferExceptionMapper())
-                                                              .setMapper(SystemMapper.getMapper())
-                                                              .addResource(new StorageController(storageManager))
-                                                              .setClientConfigurator(clientConfig -> clientConfig.property(ClientProperties.SUPPRESS_HTTP_COMPLIANCE_VALIDATION, true))
-                                                              .build();
+      .addProvider(AuthHelper.getAuthFilter())
+      .addProvider(new AuthValueFactoryProvider.Binder<>(User.class))
+      .addProvider(new ProtocolBufferMessageBodyProvider())
+      .addProvider(new ProtocolBufferValidationErrorMessageBodyWriter())
+      .addProvider(new InvalidProtocolBufferExceptionMapper())
+      .setMapper(SystemMapper.getMapper())
+      .addResource(new StorageController(storageManager))
+      .setClientConfigurator(
+          clientConfig -> clientConfig.property(ClientProperties.SUPPRESS_HTTP_COMPLIANCE_VALIDATION, true))
+      .build();
 
   @Test
   void testGetManifest() throws IOException {
@@ -385,6 +388,32 @@ class StorageControllerTest {
     assertThat(response.getStatus()).isEqualTo(413);
 
     verifyNoInteractions(storageManager);
+  }
+
+  @Test
+  void testWriteNull() {
+    Response response = resources.getJerseyTest()
+        .target("/v1/storage")
+        .request()
+        .header("Authorization", AuthHelper.getAuthHeader(AuthHelper.VALID_USER, AuthHelper.VALID_PASSWORD))
+        // required for `null` entity with PUT
+        .property(ClientProperties.SUPPRESS_HTTP_COMPLIANCE_VALIDATION, true)
+        .method("PUT");
+
+    assertThat(response.getStatus()).isEqualTo(422);
+  }
+
+  @Test
+  void testReadNull() {
+    Response response = resources.getJerseyTest()
+        .target("/v1/storage/read")
+        .request()
+        .header("Authorization", AuthHelper.getAuthHeader(AuthHelper.VALID_USER, AuthHelper.VALID_PASSWORD))
+        // required for `null` entity with PUT
+        .property(ClientProperties.SUPPRESS_HTTP_COMPLIANCE_VALIDATION, true)
+        .method("PUT");
+
+    assertThat(response.getStatus()).isEqualTo(422);
   }
 
   @Test
