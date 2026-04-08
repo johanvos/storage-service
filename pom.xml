@@ -39,7 +39,7 @@
         <google-cloud-libraries.version>26.79.0</google-cloud-libraries.version>
         <jackson-bom.version>2.21.2</jackson-bom.version>
         <kotlin.version>2.3.20</kotlin.version>
-        <libsignal-server.version>0.91.0</libsignal-server.version>
+        <libsignal-server.version>0.92.0</libsignal-server.version>
         <logback.version>1.5.32</logback.version>
         <logback-access.version>2.0.12</logback-access.version>
         <micrometer-bom.version>1.16.4</micrometer-bom.version>
