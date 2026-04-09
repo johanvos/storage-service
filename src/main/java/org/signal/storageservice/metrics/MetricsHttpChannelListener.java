@@ -15,8 +15,11 @@ import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.container.ContainerResponseContext;
 import jakarta.ws.rs.container.ContainerResponseFilter;
 import java.io.IOException;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import javax.annotation.Nullable;
+import org.apache.commons.lang3.StringUtils;
 import org.eclipse.jetty.server.Connector;
 import org.eclipse.jetty.server.HttpChannel;
 import org.eclipse.jetty.server.Request;
@@ -38,6 +41,9 @@ import org.slf4j.LoggerFactory;
  */
 public class MetricsHttpChannelListener implements HttpChannel.Listener, Container.Listener, LifeCycle.Listener,
     ContainerResponseFilter {
+
+  private static final Set<String> EXPECTED_HTTP_METHODS =
+      Set.of("GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH");
 
   private static final Logger logger = LoggerFactory.getLogger(MetricsHttpChannelListener.class);
 
@@ -151,12 +157,10 @@ public class MetricsHttpChannelListener implements HttpChannel.Listener, Contain
     requestContext.setProperty(URI_INFO_PROPERTY_NAME, requestContext.getUriInfo());
   }
 
-  private RequestInfo getRequestInfo(Request request) {
+  private RequestInfo getRequestInfo(final Request request) {
     final String path = Optional.ofNullable(request.getAttribute(URI_INFO_PROPERTY_NAME))
         .map(attr -> UriInfoUtil.getPathTemplate((ExtendedUriInfo) attr))
         .orElseGet(() -> Optional.ofNullable(request.getPathInfo()).orElse("unknown"));
-
-    final String method = Optional.ofNullable(request.getMethod()).orElse("unknown");
 
     // Response cannot be null, but its status might not always reflect an actual response status, since it gets
     // initialized to 200
@@ -164,7 +168,17 @@ public class MetricsHttpChannelListener implements HttpChannel.Listener, Contain
 
     @Nullable final String userAgent = request.getHeader(HttpHeaders.USER_AGENT);
 
-    return new RequestInfo(path, method, status, userAgent);
+    return new RequestInfo(path, normalizeMethod(request), status, userAgent);
   }
 
+  @VisibleForTesting
+  static String normalizeMethod(final Request request) {
+    if (StringUtils.isBlank(request.getMethod())) {
+      return "unknown";
+    }
+
+    return EXPECTED_HTTP_METHODS.contains(request.getMethod().toUpperCase(Locale.ROOT))
+        ? request.getMethod()
+        : "unknown";
+  }
 }

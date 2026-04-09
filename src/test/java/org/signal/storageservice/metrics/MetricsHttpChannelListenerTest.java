@@ -28,7 +28,11 @@ import org.glassfish.jersey.server.ExtendedUriInfo;
 import org.glassfish.jersey.uri.UriTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
+import javax.annotation.Nullable;
 
 class MetricsHttpChannelListenerTest {
 
@@ -102,5 +106,24 @@ class MetricsHttpChannelListenerTest {
     assertTrue(tags.contains(Tag.of(MetricsHttpChannelListener.METHOD_TAG, method)));
     assertTrue(tags.contains(Tag.of(MetricsHttpChannelListener.STATUS_CODE_TAG, String.valueOf(statusCode))));
     assertTrue(tags.contains(Tag.of(UserAgentTagUtil.PLATFORM_TAG, "android")));
+  }
+
+  @ParameterizedTest
+  @MethodSource
+  void normalizeMethod(@Nullable final String originalMethod, final String expectedMethod) {
+    final Request request = mock(Request.class);
+    when(request.getMethod()).thenReturn(originalMethod);
+
+    assertEquals(expectedMethod, MetricsHttpChannelListener.normalizeMethod(request));
+  }
+
+  private static List<Arguments> normalizeMethod() {
+    return List.of(
+        Arguments.arguments(null, "unknown"),
+        Arguments.arguments("", "unknown"),
+        Arguments.arguments("UNEXPECTED_METHOD", "unknown"),
+        Arguments.arguments("GET", "GET"),
+        Arguments.arguments("get", "get")
+    );
   }
 }
