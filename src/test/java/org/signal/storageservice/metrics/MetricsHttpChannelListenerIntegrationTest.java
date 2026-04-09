@@ -6,6 +6,7 @@
 package org.signal.storageservice.metrics;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -57,6 +58,7 @@ import org.eclipse.jetty.server.Request;
 import org.eclipse.jetty.util.component.Container;
 import org.eclipse.jetty.util.component.LifeCycle;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -264,5 +266,46 @@ class MetricsHttpChannelListenerIntegrationTest {
         // This is large enough to significantly overrun the default 8 KiB buffer
         Arguments.of("/v1/test/hello/4096", "/v1/test/hello/{repetitions}", "Hello!\n".repeat(4096), 200)
     );
+  }
+
+  @Test
+  void unexpectedMethod() throws InterruptedException {
+    final CountDownLatch countDownLatch = new CountDownLatch(1);
+    COUNT_DOWN_LATCH_FUTURE_REFERENCE.set(countDownLatch);
+
+    final ArgumentCaptor<Tags> tagCaptor = ArgumentCaptor.forClass(Tags.class);
+    when(METER_REGISTRY.counter(anyString(), any(Tags.class)))
+        .thenAnswer(invocation -> {
+          final String counterName = invocation.getArgument(0);
+
+          if (MetricsHttpChannelListener.REQUEST_COUNTER_NAME.equals(counterName)) {
+            return REQUEST_COUNTER;
+          } else if (MetricsHttpChannelListener.RESPONSE_BYTES_COUNTER_NAME.equals(counterName)) {
+            return RESPONSE_BYTES_COUNTER;
+          } else {
+            return mock(Counter.class);
+          }
+        });
+
+    try (final Response response = EXTENSION.client().target(
+            String.format("http://localhost:%d%s", EXTENSION.getLocalPort(), "/v1/test/hello"))
+        .request()
+        .header(HttpHeaders.USER_AGENT, "Signal-Android/4.53.7 (Android 8.1)")
+        .method("ANNOY")) {
+
+      assertTrue(countDownLatch.await(1000, TimeUnit.MILLISECONDS));
+
+      verify(METER_REGISTRY).counter(eq(MetricsHttpChannelListener.REQUEST_COUNTER_NAME), tagCaptor.capture());
+      verify(REQUEST_COUNTER).increment();
+
+      final Iterable<Tag> tagIterable = tagCaptor.getValue();
+      final Set<Tag> tags = new HashSet<>();
+
+      for (final Tag tag : tagIterable) {
+        tags.add(tag);
+      }
+
+      assertFalse(tags.contains(Tag.of(MetricsHttpChannelListener.METHOD_TAG, "ANNOY")));
+    }
   }
 }
