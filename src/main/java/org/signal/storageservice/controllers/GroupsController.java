@@ -531,7 +531,7 @@ public class GroupsController {
       }
 
       if (group.get().getVersion() >= submittedActions.getVersion() || group.get().getVersion() != submittedActions.getVersion() - 1) {
-        return CompletableFuture.completedFuture(Response.status(Response.Status.CONFLICT).entity(group.get()).build());
+        return CompletableFuture.completedFuture(Response.status(Response.Status.CONFLICT).build());
       }
 
       if (!submittedActions.getGroupId().isEmpty()) {
@@ -659,7 +659,7 @@ public class GroupsController {
       return groupsManager.updateGroup(user.getGroupId(), updatedGroupState)
           .thenCompose(result -> {
                 if (result.isPresent()) {
-                  return CompletableFuture.completedFuture(Response.status(Response.Status.CONFLICT).entity(result.get()).build());
+                  return CompletableFuture.completedFuture(Response.status(Response.Status.CONFLICT).build());
                 }
 
                 final GroupChangeResponse.Builder responseBuilder =
