@@ -418,6 +418,11 @@ public class GroupsController {
       return CompletableFuture.completedFuture(Response.status(Response.Status.BAD_REQUEST).build());
     }
 
+    if (!groupValidator.isValidDisappearingMessageTimer(group)) {
+      sample.stop(createGroupTimer);
+      return CompletableFuture.completedFuture(Response.status(Response.Status.BAD_REQUEST).build());
+    }
+
     if (group.getAccessControl().getAttributes() == AccessControl.AccessRequired.UNKNOWN ||
         group.getAccessControl().getAttributes() == AccessControl.AccessRequired.UNRECOGNIZED ||
         group.getAccessControl().getMembers() == AccessControl.AccessRequired.UNKNOWN ||

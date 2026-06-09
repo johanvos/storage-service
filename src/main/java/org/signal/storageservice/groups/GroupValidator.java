@@ -7,8 +7,11 @@ package org.signal.storageservice.groups;
 
 import static org.signal.storageservice.metrics.MetricsUtil.name;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.protobuf.ByteString;
 import io.micrometer.core.instrument.Metrics;
+import jakarta.ws.rs.BadRequestException;
+import jakarta.ws.rs.ForbiddenException;
 import java.security.MessageDigest;
 import java.time.Clock;
 import java.util.ArrayList;
@@ -17,8 +20,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import jakarta.ws.rs.BadRequestException;
-import jakarta.ws.rs.ForbiddenException;
 import org.apache.commons.codec.binary.Base64;
 import org.signal.libsignal.zkgroup.InvalidInputException;
 import org.signal.libsignal.zkgroup.VerificationFailedException;
@@ -44,8 +45,18 @@ import org.slf4j.LoggerFactory;
 
 public class GroupValidator {
   private static final int INVITE_LINK_PASSWORD_SIZE_BYTES = 16;
+  // Timer is an encrypted u32, wrapped in a Message (see GroupAttributeBlob src/main/proto/Groups.proto)
+  // This should max out at 39 bytes:
+  //   - 1 byte for the field
+  //   - 1-5 bytes for the u32
+  //   - 32 bytes encryption overhead
+  //   - 1-byte reserved (version)
+  // Because it is a protobuf, we allow a little extra space to be resilient to serialization changes
+  @VisibleForTesting
+  public static final int MAX_DISAPPEARING_MESSAGES_TIMER_SIZE_BYTES = 42;
   private static final String CREDENTIALS_VERSION_COUNTER_NAME = name(GroupValidator.class,
       "profileKeyCredentialsVersion");
+  private static final String INVALID_DISAPPEARING_MESSAGE_TIMER_COUNTER_NAME = name(GroupValidator.class, "invalidDisappearingMessageTimer");
   private final Logger logger = LoggerFactory.getLogger(GroupsController.class);
 
   private final ServerZkProfileOperations profileOperations;
@@ -396,6 +407,11 @@ public class GroupValidator {
       throw new BadRequestException("group invite link password cannot be set to invalid size");
     }
 
+    if (!isValidDisappearingMessageTimer(group)) {
+      logger.warn("Group has invalid timer size");
+      Metrics.counter(INVALID_DISAPPEARING_MESSAGE_TIMER_COUNTER_NAME).increment();
+    }
+
     if (group.getInviteLinkPassword().isEmpty() &&
         group.getAccessControl().getAddFromInviteLink() != AccessControl.AccessRequired.UNSATISFIABLE &&
         group.getAccessControl().getAddFromInviteLink() != AccessControl.AccessRequired.UNKNOWN) {
@@ -473,5 +489,13 @@ public class GroupValidator {
         throw new BadRequestException("invalid member pending profile key role");
       }
     }
+  }
+
+  public boolean isValidModifyDisappearingMessageTimerAction(GroupChange.Actions.ModifyDisappearingMessageTimerAction action) {
+    return action.getTimer().size() <= MAX_DISAPPEARING_MESSAGES_TIMER_SIZE_BYTES;
+  }
+
+  public boolean isValidDisappearingMessageTimer(Group group) {
+    return group.getDisappearingMessagesTimer().size() <= MAX_DISAPPEARING_MESSAGES_TIMER_SIZE_BYTES;
   }
 }

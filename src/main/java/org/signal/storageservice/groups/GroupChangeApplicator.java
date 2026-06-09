@@ -7,6 +7,8 @@ package org.signal.storageservice.groups;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.protobuf.ByteString;
+import jakarta.ws.rs.BadRequestException;
+import jakarta.ws.rs.ForbiddenException;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
@@ -16,10 +18,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 import java.util.stream.Stream;
-import jakarta.ws.rs.BadRequestException;
-import jakarta.ws.rs.ForbiddenException;
 import org.signal.storageservice.auth.GroupUser;
 import org.signal.storageservice.storage.protos.groups.AccessControl;
 import org.signal.storageservice.storage.protos.groups.Group;
@@ -477,6 +476,10 @@ public class GroupChangeApplicator {
           throws ForbiddenException {
     if (modifyDisappearingMessageTimer == null) {
       return;
+    }
+
+    if (!groupValidator.isValidModifyDisappearingMessageTimerAction(modifyDisappearingMessageTimer)) {
+      throw new BadRequestException("disappearing messages timer length exceeded");
     }
 
     if (!GroupAuth.isModifyAttributesAllowed(user, group)) {

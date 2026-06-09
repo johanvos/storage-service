@@ -55,6 +55,7 @@ import org.signal.libsignal.zkgroup.groupsend.GroupSendFullToken;
 import org.signal.libsignal.zkgroup.profiles.ClientZkProfileOperations;
 import org.signal.libsignal.zkgroup.profiles.ProfileKeyCredentialPresentation;
 import org.signal.storageservice.groups.GroupChangeApplicator;
+import org.signal.storageservice.groups.GroupValidator;
 import org.signal.storageservice.providers.ProtocolBufferMediaType;
 import org.signal.storageservice.storage.protos.groups.AccessControl;
 import org.signal.storageservice.storage.protos.groups.AvatarUploadAttributes;
@@ -525,6 +526,48 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
                                  .put(Entity.entity(group.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
 
     assertThat(response.getStatus()).isEqualTo(400);
+  }
+
+  @Test
+  void testCreateGroupBadDisappearingMessagerTimer() {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL);
+    ProfileKeyCredentialPresentation validUserTwoPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    when(groupsManager.createGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize())),
+        any(Group.class)))
+        .thenReturn(CompletableFuture.completedFuture(true));
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setDisappearingMessagesTimer(
+            ByteString.copyFromUtf8("A".repeat(GroupValidator.MAX_DISAPPEARING_MESSAGES_TIMER_SIZE_BYTES + 1)))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setPresentation(ByteString.copyFrom(validUserPresentation.serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .addMembers(Member.newBuilder()
+            .setPresentation(ByteString.copyFrom(validUserTwoPresentation.serialize()))
+            .setRole(Member.Role.DEFAULT)
+            .build())
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+        .put(Entity.entity(group.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(400);
+    verify(groupsManager, never()).createGroup(any(), any());
   }
 
   @ParameterizedTest
@@ -1243,6 +1286,58 @@ class GroupsControllerTest extends BaseGroupsControllerTest {
                                  .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
                                  .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
                                  .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
+
+    assertThat(response.getStatus()).isEqualTo(400);
+
+    verify(groupsManager, never()).updateGroup(any(), any());
+    verify(groupsManager, never()).appendChangeRecord(any(), anyInt(), any(), any());
+  }
+
+  @Test
+  void testModifyGroupDisappearingMessagesTimerTooLong() {
+    GroupSecretParams groupSecretParams = GroupSecretParams.generate();
+    GroupPublicParams groupPublicParams = groupSecretParams.getPublicParams();
+
+    ProfileKeyCredentialPresentation validUserPresentation    = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_PROFILE_CREDENTIAL    );
+    ProfileKeyCredentialPresentation validUserTwoPresentation = new ClientZkProfileOperations(AuthHelper.GROUPS_SERVER_KEY.getPublicParams()).createProfileKeyCredentialPresentation(groupSecretParams, AuthHelper.VALID_USER_TWO_PROFILE_CREDENTIAL);
+
+    Group group = Group.newBuilder()
+        .setPublicKey(ByteString.copyFrom(groupPublicParams.serialize()))
+        .setAccessControl(AccessControl.newBuilder()
+            .setMembers(AccessControl.AccessRequired.MEMBER)
+            .setAttributes(AccessControl.AccessRequired.MEMBER))
+        .setTitle(ByteString.copyFromUtf8("Some title"))
+        .setAvatarUrl(avatarFor(groupPublicParams.getGroupIdentifier().serialize()))
+        .setVersion(0)
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.ADMINISTRATOR)
+            .build())
+        .addMembers(Member.newBuilder()
+            .setUserId(ByteString.copyFrom(validUserTwoPresentation.getUuidCiphertext().serialize()))
+            .setProfileKey(ByteString.copyFrom(validUserTwoPresentation.getProfileKeyCiphertext().serialize()))
+            .setRole(Member.Role.DEFAULT)
+            .build())
+        .build();
+
+
+    when(groupsManager.getGroup(eq(ByteString.copyFrom(groupPublicParams.getGroupIdentifier().serialize()))))
+        .thenReturn(CompletableFuture.completedFuture(Optional.of(group)));
+
+    GroupChange.Actions groupChange = Actions.newBuilder()
+        .setVersion(1)
+        .setModifyDisappearingMessageTimer(
+            Actions.ModifyDisappearingMessageTimerAction.newBuilder().setTimer(ByteString.copyFromUtf8(
+                "A".repeat(GroupValidator.MAX_DISAPPEARING_MESSAGES_TIMER_SIZE_BYTES + 1)))
+                .build())
+        .build();
+
+    Response response = resources.getJerseyTest()
+        .target("/v2/groups/")
+        .request(ProtocolBufferMediaType.APPLICATION_PROTOBUF)
+        .header("Authorization", AuthHelper.getAuthHeader(groupSecretParams, AuthHelper.VALID_USER_AUTH_CREDENTIAL))
+        .method("PATCH", Entity.entity(groupChange.toByteArray(), ProtocolBufferMediaType.APPLICATION_PROTOBUF));
 
     assertThat(response.getStatus()).isEqualTo(400);
 
