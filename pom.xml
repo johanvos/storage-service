@@ -33,7 +33,7 @@
 
         <docker.image>eclipse-temurin:25-jre-jammy@sha256:305fb0c3e5f47ea70ed6670845deb8bddbc362ad4c42354e85273ec9a31bd064</docker.image>
 
-        <dropwizard.version>4.0.17</dropwizard.version>
+        <dropwizard.version>5.0.2</dropwizard.version>
 
         <google-cloud-libraries.version>26.84.0</google-cloud-libraries.version>
         <jackson-bom.version>2.22.0</jackson-bom.version>

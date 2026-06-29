@@ -22,6 +22,7 @@ import io.dropwizard.core.setup.Bootstrap;
 import io.dropwizard.core.setup.Environment;
 import java.time.Clock;
 import java.util.Set;
+import io.micrometer.core.instrument.Metrics;
 import org.signal.libsignal.zkgroup.ServerSecretParams;
 import org.signal.libsignal.zkgroup.auth.ServerZkAuthOperations;
 import org.signal.storageservice.auth.ExternalGroupCredentialGenerator;
@@ -36,7 +37,7 @@ import org.signal.storageservice.controllers.HealthCheckController;
 import org.signal.storageservice.controllers.ReadinessController;
 import org.signal.storageservice.controllers.StorageController;
 import org.signal.storageservice.filters.TimestampResponseFilter;
-import org.signal.storageservice.metrics.MetricsHttpChannelListener;
+import org.signal.storageservice.metrics.MetricsHttpEventHandler;
 import org.signal.storageservice.metrics.MetricsUtil;
 import org.signal.storageservice.providers.CompletionExceptionMapper;
 import org.signal.storageservice.providers.InvalidProtocolBufferExceptionMapper;
@@ -107,7 +108,7 @@ public class StorageService extends Application<StorageServiceConfiguration> {
     environment.jersey().register(new GroupsController(Clock.systemUTC(), groupsManager, serverSecretParams, policySigner, postPolicyGenerator, config.getGroupConfiguration(), externalGroupCredentialGenerator));
     environment.jersey().register(new GroupsV1Controller(Clock.systemUTC(), groupsManager, serverSecretParams, policySigner, postPolicyGenerator, config.getGroupConfiguration(), externalGroupCredentialGenerator));
 
-    new MetricsHttpChannelListener().configure(environment);
+    MetricsHttpEventHandler.configure(environment, Metrics.globalRegistry, Set.of("/health-check"));
 
     MetricsUtil.registerSystemResourceMetrics(environment);
   }
