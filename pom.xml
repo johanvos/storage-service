@@ -37,7 +37,7 @@
         <jackson-bom.version>2.22.1</jackson-bom.version>
         <kotlin.version>2.4.10</kotlin.version>
         <libsignal-server.version>0.99.3</libsignal-server.version>
-        <logback.version>1.6.1</logback.version>
+        <logback.version>1.5.38</logback.version>
         <logback-access.version>2.0.14</logback-access.version>
         <micrometer-bom.version>1.17.0</micrometer-bom.version>
         <!-- There are a few sneaky compatibility issues with protobuf versions:
